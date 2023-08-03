@@ -2,19 +2,33 @@
   description = "An anyrun plugin that lets you search NixOS options.";
 
   inputs = {
-    flake-utils.url = "github:numtide/flake-utils";
+    flake-parts.url = "github:hercules-ci/flake-parts";
   };
 
-  outputs = {
+  outputs = inputs @ {
     nixpkgs,
-    flake-utils,
+    flake-parts,
     ...
   }:
-    flake-utils.lib.eachDefaultSystem (
-      system: let
-        pkgs = nixpkgs.legacyPackages.${system};
-      in rec {
-        devShell = with pkgs;
+    flake-parts.lib.mkFlake {inherit inputs;} {
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+
+      perSystem = {
+        config,
+        pkgs,
+        ...
+      }: rec {
+        packages = rec {
+          anyrun-nixos-options = pkgs.callPackage ./nix {};
+          default = anyrun-nixos-options;
+        };
+
+        legacyPackages = packages;
+
+        devShells.default = with pkgs;
           mkShell {
             buildInputs = [
               cargo
@@ -24,19 +38,9 @@
               rustfmt
               rust-analyzer
             ];
+
+            inputsFrom = [packages.default];
           };
-
-        packages = rec {
-          anyrun-nixos-options = pkgs.callPackage ./nix {};
-          default = anyrun-nixos-options;
-        };
-
-        anyrunPlugins = rec {
-          anyrun-nixos-options = "${packages.default}/lib/libanyrun_nixos_options.so";
-          default = anyrun-nixos-options;
-        };
-
-        legacyPackages = packages;
-      }
-    );
+      };
+    };
 }
