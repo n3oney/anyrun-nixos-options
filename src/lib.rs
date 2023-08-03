@@ -4,7 +4,14 @@ use std::{collections::HashMap, fs};
 
 use abi_stable::std_types::{ROption, RString, RVec};
 use anyrun_plugin::*;
+use rayon::prelude::*;
 use serde::Deserialize;
+
+#[derive(Deserialize, Debug)]
+#[serde(rename = "Config")]
+pub struct AnyrunConfig {
+    max_entries: Option<usize>,
+}
 
 #[derive(Deserialize, Debug)]
 pub struct Config {
@@ -39,6 +46,7 @@ pub struct NixOSOption {
 pub struct State {
     config: Config,
     options: HashMap<String, NixOSOption>,
+    anyrun_cfg: AnyrunConfig,
 }
 
 #[init]
@@ -53,6 +61,15 @@ fn init(config_dir: RString) -> State {
 
     let cfg: Config = ron::from_str(&content).unwrap();
 
+    let anyrun_content = fs::read_to_string(format!("{}/config.ron", config_dir))
+        .unwrap_or_else(|why| panic!("Error reading anyrun config file.\n{}", why));
+
+    let anyrun_cfg: AnyrunConfig = ron::from_str(&anyrun_content).unwrap();
+
+    if anyrun_cfg.max_entries.is_none() {
+        println!("With the anyrun-nixos-options, it's recommended to set anyrun's `max_entries` to some small value.");
+    }
+
     let options = fs::read_to_string(&cfg.options_path).unwrap_or_else(|why| {
         panic!(
             "Error reading anyrun-nixos-options options.json file ({}).\n{}",
@@ -65,6 +82,7 @@ fn init(config_dir: RString) -> State {
     State {
         config: cfg,
         options,
+        anyrun_cfg,
     }
 }
 
@@ -93,11 +111,11 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
 
     let mut entries = state
         .options
-        .iter()
+        .par_iter()
         .filter_map(|(key, query)| {
             let score = matcher.fuzzy_indices(&key, &input).unwrap_or((0, vec![]));
 
-            if score.0 > state.config.min_score.unwrap_or(50) {
+            if score.0 > state.config.min_score.unwrap_or(0) {
                 Some((score, key, query))
             } else {
                 None
@@ -105,7 +123,11 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
         })
         .collect::<Vec<_>>();
 
-    entries.sort_by(|a, b| (b.0).0.cmp(&(a.0).0));
+    entries.par_sort_unstable_by(|a, b| (b.0).0.cmp(&(a.0).0));
+
+    if let Some(max_entries) = state.anyrun_cfg.max_entries {
+        entries.truncate(max_entries)
+    }
 
     let md_url_regex = regex::Regex::new(r#"\[([^\[]+)\](\(.*\))"#).unwrap();
     let url_regex =

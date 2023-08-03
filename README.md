@@ -16,10 +16,13 @@ The file looks like this:
 Config(
   options_path: "/path/to/options.json", // You can obtain it using config.system.build.manual.optionsJSON
   prefix: ":nix", // Optional, default: ":nix"
-  min_score: 50, // Optional, the minimum score of entries to show. The smaller the laggier. Default: 50
+  min_score: 0, // Optional, the minimum score of entries to show. Set it to a larger value on slow machines. Default: 0
   nixpkgs_url: "https://github.com/NixOS/nixpkgs/blob/nixos-unstable" // Optional, URL to Nixpkgs tree. Set it to use the same branch as you're using. Defaults to the unstable url.
 )
 ```
+
+**Important: Make sure to set a `max_entries` in your anyrun config. Without that, the plugin will be VERY slow, since there exist over 16 thousand options to search through at the time of writing this.**  
+**I have set mine to 10, since even that value is enough for it to go off-screen, so you shouldn't lose any data.**
 
 # Using this with NixOS?
 
