@@ -70,6 +70,12 @@ fn init(config_dir: RString) -> State {
         println!("With the anyrun-nixos-options, it's recommended to set anyrun's `max_entries` to some small value.");
     }
 
+    if let Some(max_entries) = anyrun_cfg.max_entries {
+        if max_entries == 0 {
+            println!("With the anyrun-nixos-options, it's recommended to set anyrun's `max_entries` to some small value.");
+        }
+    }
+
     let options = fs::read_to_string(&cfg.options_path).unwrap_or_else(|why| {
         panic!(
             "Error reading anyrun-nixos-options options.json file ({}).\n{}",
@@ -105,8 +111,6 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
         return RVec::new();
     };
 
-    let mut matches = vec![];
-
     let matcher = fuzzy_matcher::skim::SkimMatcherV2::default().smart_case();
 
     let mut entries = state
@@ -126,7 +130,9 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
     entries.par_sort_unstable_by(|a, b| (b.0).0.cmp(&(a.0).0));
 
     if let Some(max_entries) = state.anyrun_cfg.max_entries {
-        entries.truncate(max_entries)
+        if max_entries > 0 {
+            entries.truncate(max_entries);
+        }
     }
 
     let md_url_regex = regex::Regex::new(r#"\[([^\[]+)\](\(.*\))"#).unwrap();
@@ -138,107 +144,111 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
     let option_regex = regex::Regex::new(r#"\{option\}`(.+?)`"#).unwrap();
     let plain_url_regex = regex::Regex::new(r#"`(.+?)`"#).unwrap();
 
-    for entry in entries {
-        let encoded_desc = html_escape::encode_text(&entry.2.description);
+    entries
+        .par_iter()
+        .map(|entry| {
+            let encoded_desc = html_escape::encode_text(&entry.2.description);
 
-        let url_parsed = url_regex.replace_all(&encoded_desc, |caps: &regex::Captures| {
-            format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
-        });
-
-        let md_parsed = md_url_regex.replace_all(&url_parsed, |caps: &regex::Captures| {
-            format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
-        });
-
-        let file_parsed = file_regex.replace_all(&md_parsed, |caps: &regex::Captures| {
-            format!(r#"<span foreground="lightgreen">{}</span>"#, &caps[1])
-        });
-
-        let command_parsed = command_regex.replace_all(&file_parsed, |caps: &regex::Captures| {
-            format!(r#"<span font_family="monospace">{}</span>"#, &caps[1])
-        });
-
-        let option_parsed = option_regex.replace_all(&command_parsed, |caps: &regex::Captures| {
-            format!(
-                r#"<span font_family="monospace" foreground="orange">{}</span>"#,
-                &caps[1]
-            )
-        });
-
-        let plain_url_parsed =
-            plain_url_regex.replace_all(&option_parsed, |caps: &regex::Captures| {
+            let url_parsed = url_regex.replace_all(&encoded_desc, |caps: &regex::Captures| {
                 format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
             });
 
-        let mut description = plain_url_parsed.trim().to_string();
+            let md_parsed = md_url_regex.replace_all(&url_parsed, |caps: &regex::Captures| {
+                format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
+            });
 
-        description.push_str(&format!(
-            "\n\n<b>Type</b>: <span font_family=\"monospace\">{}</span>",
-            html_escape::encode_text(&entry.2.r#type),
-        ));
+            let file_parsed = file_regex.replace_all(&md_parsed, |caps: &regex::Captures| {
+                format!(r#"<span foreground="lightgreen">{}</span>"#, &caps[1])
+            });
 
-        if let Some(default) = &entry.2.default {
+            let command_parsed =
+                command_regex.replace_all(&file_parsed, |caps: &regex::Captures| {
+                    format!(r#"<span font_family="monospace">{}</span>"#, &caps[1])
+                });
+
+            let option_parsed =
+                option_regex.replace_all(&command_parsed, |caps: &regex::Captures| {
+                    format!(
+                        r#"<span font_family="monospace" foreground="orange">{}</span>"#,
+                        &caps[1]
+                    )
+                });
+
+            let plain_url_parsed =
+                plain_url_regex.replace_all(&option_parsed, |caps: &regex::Captures| {
+                    format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
+                });
+
+            let mut description = plain_url_parsed.trim().to_string();
+
             description.push_str(&format!(
-                "\n<b>Default</b>:{}<span font_family=\"monospace\">{}</span>",
-                if default.text.contains("\n") {
-                    "\n"
-                } else {
-                    " "
-                },
-                html_escape::encode_text(&default.text)
-            ))
-        }
+                "\n\n<b>Type</b>: <span font_family=\"monospace\">{}</span>",
+                html_escape::encode_text(&entry.2.r#type),
+            ));
 
-        if let Some(example) = &entry.2.example {
-            description.push_str(&format!(
-                "\n<b>Example</b>:{}<span font_family=\"monospace\">{}</span>",
-                if example.text.contains("\n") {
-                    "\n"
-                } else {
-                    " "
-                },
-                html_escape::encode_text(&example.text)
-            ))
-        }
-
-        let mut title = String::new();
-
-        let mut iterator = entry.1.chars().enumerate().peekable();
-
-        let mut is_red = false;
-
-        while let Some((i, char)) = iterator.next() {
-            if entry.0 .1.contains(&i) {
-                if !is_red {
-                    title.push_str(&format!("<span weight=\"bold\" foreground=\"#db5a65\">"));
-                    is_red = true;
-                }
-
-                title.push_str(&html_escape::encode_text(&char.to_string()));
-
-                if let Some(next) = iterator.peek() {
-                    if !entry.0 .1.contains(&next.0) {
-                        title.push_str("</span>");
-                        is_red = false;
-                    }
-                }
-            } else {
-                title.push_str(&html_escape::encode_text(&char.to_string()));
+            if let Some(default) = &entry.2.default {
+                description.push_str(&format!(
+                    "\n<b>Default</b>:{}<span font_family=\"monospace\">{}</span>",
+                    if default.text.contains("\n") {
+                        "\n"
+                    } else {
+                        " "
+                    },
+                    html_escape::encode_text(&default.text)
+                ))
             }
-        }
-        if is_red {
-            title.push_str("</span>");
-        }
 
-        matches.push(Match {
-            title: format!(r#"<span font_family="monospace">{}</span>"#, title).into(),
-            description: ROption::RSome(description.trim().into()),
-            icon: ROption::RNone,
-            id: ROption::RNone,
-            use_pango: true,
-        });
-    }
+            if let Some(example) = &entry.2.example {
+                description.push_str(&format!(
+                    "\n<b>Example</b>:{}<span font_family=\"monospace\">{}</span>",
+                    if example.text.contains("\n") {
+                        "\n"
+                    } else {
+                        " "
+                    },
+                    html_escape::encode_text(&example.text)
+                ))
+            }
 
-    matches.into()
+            let mut title = String::new();
+
+            let mut iterator = entry.1.chars().enumerate().peekable();
+
+            let mut is_red = false;
+
+            while let Some((i, char)) = iterator.next() {
+                if entry.0 .1.contains(&i) {
+                    if !is_red {
+                        title.push_str(&format!("<span weight=\"bold\" foreground=\"#db5a65\">"));
+                        is_red = true;
+                    }
+
+                    title.push_str(&html_escape::encode_text(&char.to_string()));
+
+                    if let Some(next) = iterator.peek() {
+                        if !entry.0 .1.contains(&next.0) {
+                            title.push_str("</span>");
+                            is_red = false;
+                        }
+                    }
+                } else {
+                    title.push_str(&html_escape::encode_text(&char.to_string()));
+                }
+            }
+            if is_red {
+                title.push_str("</span>");
+            }
+
+            Match {
+                title: format!(r#"<span font_family="monospace">{}</span>"#, title).into(),
+                description: ROption::RSome(description.trim().into()),
+                icon: ROption::RNone,
+                id: ROption::RNone,
+                use_pango: true,
+            }
+        })
+        .collect::<Vec<_>>()
+        .into()
 }
 
 #[handler]
