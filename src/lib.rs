@@ -1,5 +1,4 @@
 use fuzzy_matcher::FuzzyMatcher;
-
 use std::{collections::HashMap, fs};
 
 use abi_stable::std_types::{ROption, RString, RVec};
@@ -16,7 +15,7 @@ pub struct AnyrunConfig {
 #[derive(Deserialize, Debug)]
 pub struct Config {
     prefix: Option<String>,
-    options_path: String,
+    options_paths: Vec<String>,
     min_score: Option<i64>,
     nixpkgs_url: Option<String>,
 }
@@ -30,9 +29,24 @@ pub struct DefaultOrExample {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum Declaration {
+    NixOS(String),
+    Nmd(NmdDeclaration),
+}
+
+#[derive(Deserialize, Debug)]
+pub struct NmdDeclaration {
+    // #[serde(rename = "channelPath")]
+    // channel_path: String,
+    // path: String,
+    url: String,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct NixOSOption {
-    declarations: Vec<String>,
-    description: String,
+    declarations: Vec<Declaration>,
+    description: Option<String>,
     default: Option<DefaultOrExample>,
     example: Option<DefaultOrExample>,
     #[allow(unused)]
@@ -76,14 +90,21 @@ fn init(config_dir: RString) -> State {
         }
     }
 
-    let options = fs::read_to_string(&cfg.options_path).unwrap_or_else(|why| {
-        panic!(
-            "Error reading anyrun-nixos-options options.json file ({}).\n{}",
-            cfg.options_path, why
-        )
-    });
+    let mut options: HashMap<String, NixOSOption> = HashMap::new();
 
-    let options: HashMap<String, NixOSOption> = serde_json::from_str(&options).unwrap();
+    for path in &cfg.options_paths {
+        let raw_options = fs::read_to_string(path).unwrap_or_else(|why| {
+            panic!(
+                "Error reading anyrun-nixos-options options file ({}).\n{}",
+                path, why
+            )
+        });
+
+        let parsed_options: HashMap<String, NixOSOption> =
+            serde_json::from_str(&raw_options).unwrap();
+
+        options.extend(parsed_options);
+    }
 
     State {
         config: cfg,
@@ -147,39 +168,43 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
     entries
         .par_iter()
         .map(|entry| {
-            let encoded_desc = html_escape::encode_text(&entry.2.description);
+            let mut description = if let Some(desc) = &entry.2.description {
+                let encoded_desc = html_escape::encode_text(desc);
 
-            let url_parsed = url_regex.replace_all(&encoded_desc, |caps: &regex::Captures| {
-                format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
-            });
-
-            let md_parsed = md_url_regex.replace_all(&url_parsed, |caps: &regex::Captures| {
-                format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
-            });
-
-            let file_parsed = file_regex.replace_all(&md_parsed, |caps: &regex::Captures| {
-                format!(r#"<span foreground="lightgreen">{}</span>"#, &caps[1])
-            });
-
-            let command_parsed =
-                command_regex.replace_all(&file_parsed, |caps: &regex::Captures| {
-                    format!(r#"<span font_family="monospace">{}</span>"#, &caps[1])
-                });
-
-            let option_parsed =
-                option_regex.replace_all(&command_parsed, |caps: &regex::Captures| {
-                    format!(
-                        r#"<span font_family="monospace" foreground="orange">{}</span>"#,
-                        &caps[1]
-                    )
-                });
-
-            let plain_url_parsed =
-                plain_url_regex.replace_all(&option_parsed, |caps: &regex::Captures| {
+                let url_parsed = url_regex.replace_all(&encoded_desc, |caps: &regex::Captures| {
                     format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
                 });
 
-            let mut description = plain_url_parsed.trim().to_string();
+                let md_parsed = md_url_regex.replace_all(&url_parsed, |caps: &regex::Captures| {
+                    format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
+                });
+
+                let file_parsed = file_regex.replace_all(&md_parsed, |caps: &regex::Captures| {
+                    format!(r#"<span foreground="lightgreen">{}</span>"#, &caps[1])
+                });
+
+                let command_parsed =
+                    command_regex.replace_all(&file_parsed, |caps: &regex::Captures| {
+                        format!(r#"<span font_family="monospace">{}</span>"#, &caps[1])
+                    });
+
+                let option_parsed =
+                    option_regex.replace_all(&command_parsed, |caps: &regex::Captures| {
+                        format!(
+                            r#"<span font_family="monospace" foreground="orange">{}</span>"#,
+                            &caps[1]
+                        )
+                    });
+
+                let plain_url_parsed =
+                    plain_url_regex.replace_all(&option_parsed, |caps: &regex::Captures| {
+                        format!(r#"<span foreground="lightblue"><u>{}</u></span>"#, &caps[1])
+                    });
+
+                plain_url_parsed.trim().to_string()
+            } else {
+                "".to_string()
+            };
 
             description.push_str(&format!(
                 "\n\n<b>Type</b>: <span font_family=\"monospace\">{}</span>",
@@ -267,7 +292,12 @@ fn handler(selection: Match, state: &mut State) -> HandleResult {
     let value = state.options.get(&key_with_no_monospace.to_string());
 
     if let Some(value) = value {
-        for url in &value.declarations {
+        for declaration in &value.declarations {
+            let url = match declaration {
+                Declaration::NixOS(v) => v,
+                Declaration::Nmd(v) => &v.url,
+            };
+
             open::that(format!(
                 "{}/{}",
                 state

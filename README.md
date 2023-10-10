@@ -14,7 +14,7 @@ The file looks like this:
 
 ```ron
 Config(
-  options_path: "/path/to/options.json", // You can obtain it using config.system.build.manual.optionsJSON
+  options_paths: ["/path/to/options.json"], // You can obtain it using config.system.build.manual.optionsJSON
   prefix: ":nix", // Optional, default: ":nix"
   min_score: 0, // Optional, the minimum score of entries to show. Set it to a larger value on slow machines. Default: 0
   nixpkgs_url: "https://github.com/NixOS/nixpkgs/blob/nixos-unstable" // Optional, URL to Nixpkgs tree. Set it to use the same branch as you're using. Defaults to the unstable url.

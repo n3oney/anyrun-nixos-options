@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "anyrun-nixos-options"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "abi_stable",
  "anyrun-plugin",
