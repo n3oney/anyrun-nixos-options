@@ -1,6 +1,10 @@
 use fuzzy_matcher::FuzzyMatcher;
 use serde_inline_default::serde_inline_default;
-use std::{collections::HashMap, fs};
+use std::{
+    collections::HashMap,
+    fs,
+    sync::{Arc, Mutex},
+};
 
 use abi_stable::std_types::{ROption, RString, RVec};
 use anyrun_plugin::*;
@@ -16,9 +20,7 @@ pub struct AnyrunConfig {
 #[serde_inline_default]
 #[derive(Deserialize, Debug)]
 pub struct Config {
-    #[serde_inline_default(":nix".to_string())]
-    prefix: String,
-    options_paths: Vec<String>,
+    options: HashMap<String, Vec<String>>,
     #[serde_inline_default(0)]
     min_score: i64,
     #[serde_inline_default("https://github.com/NixOS/nixpkgs/blob/nixos-unstable".to_string())]
@@ -64,7 +66,7 @@ pub struct NixOSOption {
 
 pub struct State {
     config: Config,
-    options: HashMap<String, NixOSOption>,
+    options: HashMap<String, HashMap<String, NixOSOption>>,
     anyrun_cfg: AnyrunConfig,
 }
 
@@ -95,20 +97,26 @@ fn init(config_dir: RString) -> State {
         }
     }
 
-    let mut options: HashMap<String, NixOSOption> = HashMap::new();
+    let mut options: HashMap<String, HashMap<String, NixOSOption>> = HashMap::new();
 
-    for path in &cfg.options_paths {
-        let raw_options = fs::read_to_string(path).unwrap_or_else(|why| {
-            panic!(
-                "Error reading anyrun-nixos-options options file ({}).\n{}",
-                path, why
-            )
-        });
+    for option in &cfg.options {
+        let mut hash_map: HashMap<String, NixOSOption> = HashMap::new();
 
-        let parsed_options: HashMap<String, NixOSOption> =
-            serde_json::from_str(&raw_options).unwrap();
+        for path in option.1 {
+            let raw_options = fs::read_to_string(path).unwrap_or_else(|why| {
+                panic!(
+                    "Error reading anyrun-nixos-options options file ({}).\n{}",
+                    path, why
+                )
+            });
 
-        options.extend(parsed_options);
+            let parsed_options: HashMap<String, NixOSOption> =
+                serde_json::from_str(&raw_options).unwrap();
+
+            hash_map.extend(parsed_options);
+        }
+
+        options.insert(option.0.clone(), hash_map);
     }
 
     State {
@@ -128,49 +136,54 @@ fn info() -> PluginInfo {
 
 #[get_matches]
 fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
-    let input = if let Some(input) = input.strip_prefix(&state.config.prefix.clone()) {
-        let trimmed = input.trim();
-        trimmed.replace(" ", ".")
-    } else {
-        return RVec::new();
-    };
+    let results = Arc::new(Mutex::new(RVec::<Match>::new()));
 
-    let matcher = fuzzy_matcher::skim::SkimMatcherV2::default().smart_case();
+    for option in &state.options {
+        let prefix = option.0;
 
-    let mut entries = state
-        .options
-        .par_iter()
-        .filter_map(|(key, query)| {
-            let score = matcher.fuzzy_indices(&key, &input).unwrap_or((0, vec![]));
+        let input = if let Some(input) = input.strip_prefix(prefix) {
+            let trimmed = input.trim();
+            trimmed.replace(" ", ".")
+        } else {
+            continue;
+        };
 
-            if score.0 > state.config.min_score {
-                Some((score, key, query))
-            } else {
-                None
+        let matcher = fuzzy_matcher::skim::SkimMatcherV2::default().smart_case();
+
+        let mut entries = option
+            .1
+            .par_iter()
+            .filter_map(|(key, query)| {
+                let score = matcher.fuzzy_indices(&key, &input).unwrap_or((0, vec![]));
+
+                if score.0 > state.config.min_score {
+                    Some((score, key, query))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        entries.par_sort_unstable_by(|a, b| (b.0).0.cmp(&(a.0).0));
+
+        if let Some(max_entries) = state.anyrun_cfg.max_entries {
+            if max_entries > 0 {
+                entries.truncate(max_entries);
             }
-        })
-        .collect::<Vec<_>>();
-
-    entries.par_sort_unstable_by(|a, b| (b.0).0.cmp(&(a.0).0));
-
-    if let Some(max_entries) = state.anyrun_cfg.max_entries {
-        if max_entries > 0 {
-            entries.truncate(max_entries);
         }
-    }
 
-    let md_url_regex = regex::Regex::new(r#"\[([^\[]+)\](\(.*\))"#).unwrap();
-    let url_regex =
-        regex::Regex::new(r#"&lt;([^\s\.]+\.[^\s]{2,}|www\.[^\s]+\.[^\s]{2,})&gt;"#).unwrap();
+        let md_url_regex = regex::Regex::new(r#"\[([^\[]+)\](\(.*\))"#).unwrap();
+        let url_regex =
+            regex::Regex::new(r#"&lt;([^\s\.]+\.[^\s]{2,}|www\.[^\s]+\.[^\s]{2,})&gt;"#).unwrap();
 
-    let file_regex = regex::Regex::new(r#"\{file\}`(.+?)`"#).unwrap();
-    let command_regex = regex::Regex::new(r#"\{command\}`(.+?)`"#).unwrap();
-    let option_regex = regex::Regex::new(r#"\{option\}`(.+?)`"#).unwrap();
-    let plain_url_regex = regex::Regex::new(r#"`(.+?)`"#).unwrap();
+        let file_regex = regex::Regex::new(r#"\{file\}`(.+?)`"#).unwrap();
+        let command_regex = regex::Regex::new(r#"\{command\}`(.+?)`"#).unwrap();
+        let option_regex = regex::Regex::new(r#"\{option\}`(.+?)`"#).unwrap();
+        let plain_url_regex = regex::Regex::new(r#"`(.+?)`"#).unwrap();
 
-    entries
-        .par_iter()
-        .map(|entry| {
+        let res = results.clone();
+
+        entries.par_iter().for_each(move |entry| {
             let mut description = if let Some(desc) = &entry.2.description {
                 let encoded_desc = html_escape::encode_text(desc);
 
@@ -267,16 +280,20 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
                 title.push_str("</span>");
             }
 
-            Match {
+            res.lock().unwrap().push(Match {
                 title: format!(r#"<span font_family="monospace">{}</span>"#, title).into(),
                 description: ROption::RSome(description.trim().into()),
                 icon: ROption::RNone,
                 id: ROption::RNone,
                 use_pango: true,
-            }
-        })
-        .collect::<Vec<_>>()
-        .into()
+            })
+        });
+    }
+
+    Arc::try_unwrap(results)
+        .unwrap_or_else(|_| panic!("Failed to get results"))
+        .into_inner()
+        .unwrap()
 }
 
 #[handler]
@@ -292,19 +309,28 @@ fn handler(selection: Match, state: &mut State) -> HandleResult {
 
     let key_with_no_monospace = &key[30..key.len() - 7];
 
-    let value = state.options.get(&key_with_no_monospace.to_string());
+    for option in &state.options {
+        let value = option.1.get(&key_with_no_monospace.to_string());
 
-    if let Some(value) = value {
-        for declaration in &value.declarations {
-            let url = match declaration {
-                Declaration::NixOS(v) => v,
-                Declaration::Nmd(v) => &v.url,
-            };
+        if let Some(value) = value {
+            for declaration in &value.declarations {
+                let url = match declaration {
+                    Declaration::NixOS(v) => v,
+                    Declaration::Nmd(v) => &v.url,
+                };
 
-            open::that(format!("{}/{}", state.config.nixpkgs_url.clone(), url)).ok();
+                let parsed_url = url::Url::parse(url);
+
+                let final_url = match parsed_url {
+                    Ok(_) => url.clone(),
+                    Err(_) => format!("{}/{}", state.config.nixpkgs_url.clone(), url),
+                };
+
+                open::that(final_url).ok();
+            }
+            return HandleResult::Close;
         }
-        HandleResult::Close
-    } else {
-        HandleResult::Refresh(false)
     }
+
+    return HandleResult::Refresh(false);
 }
