@@ -50,12 +50,12 @@ programs.anyrun.config = {
     programs.anyrun.extraConfigFiles."nixos-options.ron".text = let
         #               ↓ home-manager refers to the nixos configuration as osConfig
         nixos-options = osConfig.system.build.manual.optionsJSON + "/share/doc/nixos/options.json";
-        # get the docs-json package from the home-manager flake
-        hm-options = inputs.home-manager.packages.${pkgs.system}.docs-json + "/share/doc/home-manager/options.json";
         # merge your options
         options = builtins.toJSON ["${nixos-options}"];
         # or alternatively if you wish to read any other documentation options, such as home-manager
-        # options = builtins.toJSON ["${nixos-options}" "${nixos-options}" "${some-other-option}" /* ... */];
+        # get the docs-json package from the home-manager flake
+        # hm-options = inputs.home-manager.packages.${pkgs.system}.docs-json + "/share/doc/home-manager/options.json";
+        # options = builtins.toJSON ["${nixos-options}" "${hm-options}" "${some-other-option}" /* ... */];
 
     in ''
         Config(
