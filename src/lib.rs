@@ -1,4 +1,5 @@
 use fuzzy_matcher::FuzzyMatcher;
+use serde_inline_default::serde_inline_default;
 use std::{collections::HashMap, fs};
 
 use abi_stable::std_types::{ROption, RString, RVec};
@@ -12,12 +13,16 @@ pub struct AnyrunConfig {
     max_entries: Option<usize>,
 }
 
+#[serde_inline_default]
 #[derive(Deserialize, Debug)]
 pub struct Config {
-    prefix: Option<String>,
+    #[serde_inline_default(":nix".to_string())]
+    prefix: String,
     options_paths: Vec<String>,
-    min_score: Option<i64>,
-    nixpkgs_url: Option<String>,
+    #[serde_inline_default(0)]
+    min_score: i64,
+    #[serde_inline_default("https://github.com/NixOS/nixpkgs/blob/nixos-unstable".to_string())]
+    nixpkgs_url: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -123,9 +128,7 @@ fn info() -> PluginInfo {
 
 #[get_matches]
 fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
-    let input = if let Some(input) =
-        input.strip_prefix(&state.config.prefix.clone().unwrap_or(":nix".to_string()))
-    {
+    let input = if let Some(input) = input.strip_prefix(&state.config.prefix.clone()) {
         let trimmed = input.trim();
         trimmed.replace(" ", ".")
     } else {
@@ -140,7 +143,7 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
         .filter_map(|(key, query)| {
             let score = matcher.fuzzy_indices(&key, &input).unwrap_or((0, vec![]));
 
-            if score.0 > state.config.min_score.unwrap_or(0) {
+            if score.0 > state.config.min_score {
                 Some((score, key, query))
             } else {
                 None
@@ -298,16 +301,7 @@ fn handler(selection: Match, state: &mut State) -> HandleResult {
                 Declaration::Nmd(v) => &v.url,
             };
 
-            open::that(format!(
-                "{}/{}",
-                state
-                    .config
-                    .nixpkgs_url
-                    .clone()
-                    .unwrap_or("https://github.com/NixOS/nixpkgs/blob/nixos-unstable".to_owned()),
-                url
-            ))
-            .ok();
+            open::that(format!("{}/{}", state.config.nixpkgs_url.clone(), url)).ok();
         }
         HandleResult::Close
     } else {

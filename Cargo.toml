@@ -1,6 +1,6 @@
 [package]
 name = "anyrun-nixos-options"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "An anyrun plugin that lets you search NixOS options."
 
@@ -20,3 +20,4 @@ html-escape = "0.2.13"
 regex = "1.9.1"
 open = "5.0.0"
 rayon = "1.7.0"
+serde-inline-default = "0.1.1"
