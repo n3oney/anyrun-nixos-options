@@ -65,7 +65,7 @@ programs.anyrun.config = {
 
     in ''
         Config(
-            # add your option paths
+            // add your option paths
             options: ${options},
          )
     '';
