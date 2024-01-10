@@ -25,6 +25,7 @@ pub struct Config {
     min_score: i64,
     #[serde_inline_default("https://github.com/NixOS/nixpkgs/blob/nixos-unstable".to_string())]
     nixpkgs_url: String,
+    max_entries: Option<usize>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -166,11 +167,12 @@ fn get_matches(input: RString, state: &mut State) -> RVec<Match> {
 
         entries.par_sort_unstable_by(|a, b| (b.0).0.cmp(&(a.0).0));
 
-        if let Some(max_entries) = state.anyrun_cfg.max_entries {
-            if max_entries > 0 {
-                entries.truncate(max_entries);
-            }
-        }
+        let plugin_max_entries = state.config.max_entries.unwrap_or(usize::MAX);
+        let anyrun_max_entries = state.anyrun_cfg.max_entries.unwrap_or(usize::MAX);
+
+        let max_entries = plugin_max_entries.min(anyrun_max_entries);
+
+        entries.truncate(max_entries);
 
         let md_url_regex = regex::Regex::new(r#"\[([^\[]+)\](\(.*\))"#).unwrap();
         let url_regex =
